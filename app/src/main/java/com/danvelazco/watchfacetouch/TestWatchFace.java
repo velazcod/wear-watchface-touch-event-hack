@@ -23,18 +23,24 @@ import android.content.IntentFilter;
 import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Paint;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
+import android.support.annotation.NonNull;
 import android.support.wearable.watchface.CanvasWatchFaceService;
 import android.support.wearable.watchface.WatchFaceStyle;
 import android.text.format.Time;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.SurfaceHolder;
+import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.widget.Toast;
 
 import java.util.TimeZone;
 import java.util.concurrent.TimeUnit;
@@ -44,18 +50,74 @@ import java.util.concurrent.TimeUnit;
  * the text is drawn without anti-aliasing in ambient mode.
  */
 public class TestWatchFace extends CanvasWatchFaceService {
+
+    // Constants
     private static final Typeface NORMAL_TYPEFACE =
             Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL);
+
+    // Members
+    private Engine mEngine;
 
     /**
      * Update rate in milliseconds for interactive mode. We update once a second since seconds are displayed in
      * interactive mode.
      */
     private static final long INTERACTIVE_UPDATE_RATE_MS = TimeUnit.SECONDS.toMillis(1);
+    private View mEmptyOverlayView;
 
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void onCreate() {
+        super.onCreate();
+
+        // Create a new empty view along with a touch listener that will delegate the events to the Engine
+        mEmptyOverlayView = new View(this);
+        mEmptyOverlayView.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View v, @NonNull MotionEvent event) {
+                return mEngine != null && mEngine.handleTouchEvent(event);
+            }
+        });
+        mEmptyOverlayView.setBackgroundColor(0x9932CD32);
+
+        // Add the view to the WindowManager as a full overlay
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                65, // width
+                65, // height
+                WindowManager.LayoutParams.TYPE_SYSTEM_ALERT,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+                PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.CENTER;
+        WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        wm.addView(mEmptyOverlayView, params);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public void onDestroy() {
+        if (mEmptyOverlayView != null) {
+            WindowManager wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+            wm.removeView(mEmptyOverlayView);
+        }
+        if (mEngine != null) {
+            mEngine.unregisterReceiver();
+        }
+        super.onDestroy();
+    }
+
+    /**
+     * {@inheritDoc}
+     */
     @Override
     public Engine onCreateEngine() {
-        return new Engine();
+        mEngine = new Engine();
+        return mEngine;
     }
 
     private class Engine extends CanvasWatchFaceService.Engine {
@@ -94,6 +156,7 @@ public class TestWatchFace extends CanvasWatchFaceService {
         Paint mBackgroundPaint;
         Paint mTextPaint;
 
+        boolean mVisible = true; // TODO: handle this!
         boolean mAmbient;
 
         Time mTime;
@@ -126,12 +189,26 @@ public class TestWatchFace extends CanvasWatchFaceService {
             mTextPaint = createTextPaint(resources.getColor(R.color.digital_text));
 
             mTime = new Time();
+
+            // [NOTE][DV]: This doesn't really work... we never get the touch events on the engine
+            //setTouchEventsEnabled(true);
         }
 
         @Override
         public void onDestroy() {
             mUpdateTimeHandler.removeMessages(MSG_UPDATE_TIME);
             super.onDestroy();
+        }
+
+        public boolean handleTouchEvent(MotionEvent event) {
+            Log.d("TEST", "handleTouchEvent() -- event: " + event.toString());
+            if ((event.getAction() == MotionEvent.ACTION_UP) && !mAmbient && mVisible) {
+                Toast.makeText(TestWatchFace.this, "Touch!", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+
+            // Do not handle the event, let the touch event get delegated to the proper views
+            return false;
         }
 
         private Paint createTextPaint(int textColor) {
@@ -145,6 +222,16 @@ public class TestWatchFace extends CanvasWatchFaceService {
         @Override
         public void onVisibilityChanged(boolean visible) {
             super.onVisibilityChanged(visible);
+
+            mVisible = visible;
+
+            if (!isInAmbientMode()) {
+                mEmptyOverlayView.setVisibility(visible ? View.VISIBLE : View.GONE);
+            } else {
+                mEmptyOverlayView.setVisibility(View.GONE);
+            }
+
+            mEmptyOverlayView.setVisibility(isVisible() && !isInAmbientMode() ? View.VISIBLE : View.GONE);
 
             if (visible) {
                 registerReceiver();
@@ -215,6 +302,8 @@ public class TestWatchFace extends CanvasWatchFaceService {
                 }
                 invalidate();
             }
+
+            mEmptyOverlayView.setVisibility(isVisible() && !isInAmbientMode() ? View.VISIBLE : View.GONE);
 
             // Whether the timer should be running depends on whether we're visible (as well as
             // whether we're in ambient mode), so we may need to start or stop the timer.
